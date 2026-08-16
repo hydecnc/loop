@@ -1,0 +1,17 @@
+[project]
+name = "loop"
+version = "0.1.0"
+description = "Fuzzing loop to discover bugs similar to GPUBreach"
+readme = "README.md"
+authors = [
+    { name = "Hyde Yoo", email = "hydeyoo0716@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = []
+
+[project.scripts]
+loop = "loop.main:main"
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"

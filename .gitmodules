@@ -1,0 +1,6 @@
+[submodule "StepStone-fuzzer"]
+	path = StepStone-fuzzer
+	url = git@github.com:hydecnc/StepStone-fuzzer.git
+[submodule "open-gpu-kernel-modules"]
+	path = open-gpu-kernel-modules
+	url = git@github.com:hydecnc/open-gpu-kernel-modules.git
