@@ -32,24 +32,36 @@ The loop root contains:
 
 ```
 instruction.md                  this file
-main.py                         the loop driver
-instances/instance-N/log        round N's executor log of function calls
-instances/instance-N/report     round N's crash report, if there was one
+src/loop/                       the loop driver
+instances/instance-N/log        round N's console log, when the round produced no crash
+instances/instance-N/crashes/   round N's crashes, one directory each, when it did
 StepStone-fuzzer/               the fuzzer
-ogkm/                           the NVIDIA driver source, 560.35.03
+open-gpu-kernel-modules/        the NVIDIA driver source, 560.35.03
 ```
 
-Appended after this prompt are three lines identifying the round:
+Appended after this prompt are two lines identifying the round. A quiet run:
 
 ```
 Round: N
 Log: instances/instance-N/log
-Report: instances/instance-N/report      (or the literal text below)
 ```
 
-**If the text after `Report:` is exactly `Does not exist.`, the run produced no
-crash.** That is how you tell the two cases below apart — not by size, and not by
-the presence of scary-looking lines in the log.
+A run that crashed:
+
+```
+Round: N
+Crashes: instances/instance-N/crashes
+```
+
+**A `Crashes:` line means the run produced at least one crash; a `Log:` line means
+it did not.** That is how you tell the two cases below apart — not by size, and not
+by the presence of scary-looking lines in the log.
+
+Each directory under `crashes/` is one distinct crash, named by its hash, and holds
+a `description` (the title syzkaller assigned it), one `logN` per occurrence (the
+console log up to that point) and the matching `reportN` (the parsed report). A
+round can record several crashes of different kinds; read every `description`
+first, then decide which ones the sections below apply to.
 
 Those are paths, not contents. Read the log from disk: it can be hundreds of
 megabytes and millions of lines, so use grep, awk and short scripts, and never
@@ -57,8 +69,8 @@ read it end to end.
 
 You are invoked in either of two situations, and you perform steps 1 to 3 in both:
 
-- the fuzzer reported a crash (a `report` file exists), or
-- the fuzzer ran for a long stretch without crashing and without reaching anything new (no `report` file).
+- the fuzzer reported a crash (a `Crashes:` line is present), or
+- the fuzzer ran for a long stretch without crashing and without reaching anything new (a `Log:` line instead).
 
 The second case is the ordinary one in early rounds, because the first constraints are about reaching the target code at all rather than about breaking it. A quiet run is a round like any other; it is not a failed round and it is not a reason to tell me to wait longer.
 
@@ -76,7 +88,7 @@ If you cannot decide which one you are holding, treat it as a memory-safety repo
 
 ### Xid lines end the run
 
-A wedged GPU leaves the kernel healthy, so it used to go undetected and the fuzzer spent the rest of the round executing programs against a dead device. `syz-manager` now treats `NVRM: Xid (PCI:...): 119 | 120 | 79 | 62` as a crash: the round stops at that line and the VM is replaced. A `report` file will exist, titled `NVRM: GSP RPC timeout`, `NVRM: GSP task exception`, `NVRM: GPU has fallen off the bus`, or `NVRM: PMU halt`. Xid 13, 31, 43 and 69 are ignored; the device survives those.
+A wedged GPU leaves the kernel healthy, so it used to go undetected and the fuzzer spent the rest of the round executing programs against a dead device. `syz-manager` now treats `NVRM: Xid (PCI:...): 119 | 120 | 79 | 62` as a crash: the round stops at that line and the VM is replaced. A crash directory will exist whose `description` reads `NVRM: GSP RPC timeout`, `NVRM: GSP task exception`, `NVRM: GPU has fallen off the bus`, or `NVRM: PMU halt`. Xid 13, 31, 43 and 69 are ignored; the device survives those.
 
 Three consequences for your analysis:
 
@@ -128,13 +140,13 @@ All paths are relative to the loop root, which is your working directory.
 | their declarations                                      | `StepStone-fuzzer/gpu_instrumentation/gpu_instrumentation.h`   |
 | executor-side wrapper, guarded by `SYZ_EXECUTOR_NVIDIA` | `StepStone-fuzzer/executor/syz_nvidia.h`                       |
 | seed programs, syzkaller program syntax                 | `StepStone-fuzzer/gpu_instrumentation/seed/*.prog`             |
-| driver source                                           | `ogkm/`                                                        |
+| driver source                                           | `open-gpu-kernel-modules/`                                     |
 
 Every seed program goes in `StepStone-fuzzer/gpu_instrumentation/seed/`, and nothing else goes in that directory — it is packed wholesale into the corpus (`syz-db pack`), so a stray file there becomes a corpus entry or a load error. Do not leave `.prog` files loose in `gpu_instrumentation/` or anywhere else in the tree.
 
 `executor/gpu_instrumentation` and `sys/linux/gpu_instrumentation.txt` are symlinks into that one `gpu_instrumentation/` directory. Edit the real files listed above, not the symlinked views.
 
-**I commit for you.** After you finish, the loop runs `git add -A` and commits in both `StepStone-fuzzer/` and `ogkm/`. Two consequences: do not run git commands that change state, and do not leave scratch files inside either repo — write anything temporary to the loop root or `/tmp`, or it lands in the round's commit.
+**I commit for you.** After you finish, the loop runs `git add -A` and commits in both `StepStone-fuzzer/` and `open-gpu-kernel-modules/`. Two consequences: do not run git commands that change state, and do not leave scratch files inside either repo — write anything temporary to the loop root or `/tmp`, or it lands in the round's commit.
 
 Adding or removing a pseudo system call requires regenerating the descriptions before the fuzzer will build. Say so when a change needs that. Also say so when a change removes or renames a call, because saved corpus entries referencing it will be dropped on the next run.
 
@@ -175,4 +187,4 @@ this round's log alone; a memory written in one round is loaded by the next and
 becomes exactly the accumulated hypothesis this design removes. The ledger is the
 only thing that carries across rounds.
 
-Do not read git history or commit messages in `ogkm/`. It is stock vendor source and its history is not part of this experiment. `StepStone-fuzzer/` is the opposite case: its history is the loop's own record, one commit per round, and reading `git log` and `git diff` there is expected.
+Do not read git history or commit messages in `open-gpu-kernel-modules/`. It is stock vendor source and its history is not part of this experiment. `StepStone-fuzzer/` is the opposite case: its history is the loop's own record, one commit per round, and reading `git log` and `git diff` there is expected.
