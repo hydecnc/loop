@@ -31,15 +31,22 @@ def commit_changes() -> None:
 def run_fuzz_loop():
     while True:
         print("====Lauching Fuzzer====")
-        _ = launch_fuzzer()
+        if not launch_fuzzer():
+            print(
+                "Failed to kill the fuzzing instance. Make sure to kill it before running the loop again."
+            )
+            return
+
         print("====Copying Instance====")
         _ = copy_instance()
-        print("====Committing Changes====")
-        commit_changes()
+
         print("====Analyzing Instance====")
         if not analyze_instance():
             print("Analysis failed. Stopping.")
             return
+
+        print("====Committing Changes====")
+        commit_changes()
 
 
 def main() -> None:

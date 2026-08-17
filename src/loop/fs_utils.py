@@ -34,9 +34,9 @@ def copy_instance():
         empty = not any(it)
 
     if empty:
-        shutil.copy(console_logs, instance / "log")
+        _ = shutil.copy(console_logs, instance / "log")
     else:
-        shutil.copytree(crashes, instance / "crashes", dirs_exist_ok=True)
+        _ = shutil.copytree(crashes, instance / "crashes", dirs_exist_ok=True)
 
     return instance
 

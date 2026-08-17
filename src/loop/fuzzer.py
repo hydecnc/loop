@@ -1,11 +1,28 @@
 import os
-import shutil
+import signal
 import subprocess
 
 from .config import config
+from .fs_utils import latest_instance
 
 
-def launch_fuzzer():
+def dump_workdir() -> None:
+    if not config.workdir.exists():
+        return
+
+    config.workdir_dumps.mkdir(parents=True, exist_ok=True)
+    base = config.workdir_dumps / f"{config.instance_prefix}-{latest_instance()}"
+    dump_loc = base
+    collision = 0
+    while dump_loc.exists():
+        collision += 1
+        dump_loc = base.with_name(f"{base.name}.{collision}")
+
+    _ = config.workdir.rename(dump_loc)
+    print(f"Dumped previous workdir to {dump_loc}")
+
+
+def launch_fuzzer() -> bool:
     # remake all components
     _ = subprocess.run(
         ["./tools/syz-env", "make", "clean"],
@@ -24,8 +41,8 @@ def launch_fuzzer():
     )
 
     # setup workdir & corpus
-    shutil.rmtree(config.workdir, ignore_errors=True)
-    os.makedirs(config.workdir, exist_ok=True)
+    dump_workdir()
+    os.makedirs(config.workdir)
     _ = subprocess.run(
         [
             "./bin/syz-db",
@@ -55,7 +72,14 @@ def launch_fuzzer():
         try:
             _ = manager.wait(timeout=config.fuzzer_timeout)
         except subprocess.TimeoutExpired:
-            manager.terminate()
-            _ = manager.wait()
+            print("====Terminating Fuzzer====")
+            manager.send_signal(signal.SIGINT)
+            try:
+                print(
+                    f"Giving fuzzer {config.fuzzer_shutdown_grace}seconds before halting the loop process"
+                )
+                _ = manager.wait(timeout=config.fuzzer_shutdown_grace)
+            except subprocess.TimeoutExpired:
+                return False
 
-    return manager
+    return True
