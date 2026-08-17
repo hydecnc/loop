@@ -1,5 +1,4 @@
 import os
-import signal
 import subprocess
 
 from .config import config
@@ -56,11 +55,15 @@ def launch_fuzzer() -> bool:
 
     # run the fuzzer, teeing its output to the log the analysis reads
     with open(config.workdir / "log", "wb") as log:
-        # syz-manager is assumed to be given permission to run as sudo without password
-        manager = subprocess.Popen(
+        # timeout and syz-manager is assumed to be given permission to run as sudo without password
+        manager = subprocess.run(
             [
                 "sudo",
                 "-n",
+                "timeout",
+                "--signal=INT",
+                f"--kill-after={config.fuzzer_shutdown_grace}",
+                f"{config.fuzzer_timeout}",
                 "./bin/syz-manager",
                 "-debug",
                 "-config=tutorial/default.cfg",
@@ -69,17 +72,13 @@ def launch_fuzzer() -> bool:
             stdout=log,
             stderr=subprocess.STDOUT,
         )
-        try:
-            _ = manager.wait(timeout=config.fuzzer_timeout)
-        except subprocess.TimeoutExpired:
-            print("====Terminating Fuzzer====")
-            manager.send_signal(signal.SIGINT)
-            try:
-                print(
-                    f"Giving fuzzer {config.fuzzer_shutdown_grace}seconds before halting the loop process"
-                )
-                _ = manager.wait(timeout=config.fuzzer_shutdown_grace)
-            except subprocess.TimeoutExpired:
-                return False
+    if manager.returncode == 124:
+        return True
+    elif manager.returncode == 137:
+        print("syz-manager killed forcefully. Check if the VM is still up.")
+        return False
 
-    return True
+    print(
+        f"syz-manager exited early ({manager.returncode}). See {config.workdir / 'log'}"
+    )
+    return False

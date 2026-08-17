@@ -32,9 +32,7 @@ def run_fuzz_loop():
     while True:
         print("====Lauching Fuzzer====")
         if not launch_fuzzer():
-            print(
-                "Failed to kill the fuzzing instance. Make sure to kill it before running the loop again."
-            )
+            print("Fuzzer round failed. Stopping.")
             return
 
         print("====Copying Instance====")
