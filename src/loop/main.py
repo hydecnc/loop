@@ -37,9 +37,11 @@ def run_fuzz_loop():
         print("====Committing Changes====")
         commit_changes()
         print("====Analyzing Instance====")
-        analyze_instance()
+        if not analyze_instance():
+            print("Analysis failed. Stopping.")
+            return
 
 
 def main() -> None:
-    print("==Loop Fuzzing==")
+    print("==========Loop Fuzzing==========")
     run_fuzz_loop()

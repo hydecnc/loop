@@ -1,26 +1,48 @@
-import subprocess
+import asyncio
+from pathlib import Path
+
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ResultMessage,
+    TextBlock,
+    ToolUseBlock,
+    query,
+)
 
 from .config import config
 from .fs_utils import latest_instance
 
 
-def run_claude(prompt: str, project_dir: str = ".") -> int:
-    result = subprocess.run(
-        [
-            "claude",
-            "-p",
-            "--model",
-            config.claude_model,
-            "--permission-mode",
-            "acceptEdits",
-            "--allowedTools",
-            ",".join(config.claude_allowed_tools),
-        ],
-        input=prompt,
-        cwd=project_dir,
-        text=True,
+async def _execute_agent(prompt: str, transcript: Path) -> bool:
+    options = ClaudeAgentOptions(
+        model=config.claude_model,
+        cwd=Path.cwd(),
+        allowed_tools=list(config.claude_allowed_tools),
+        permission_mode="acceptEdits",
+        max_turns=60,
+        setting_sources=[],
     )
-    return result.returncode
+
+    result: ResultMessage | None = None
+    with transcript.open("w", encoding="utf-8") as file:
+        async for message in query(prompt=prompt, options=options):
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        print(block.text, end="", flush=True)
+                        _ = file.write(block.text)
+                    elif isinstance(block, ToolUseBlock):
+                        _ = file.write(f"\n[{block.name}] {block.input}\n")
+            elif isinstance(message, ResultMessage):
+                result = message
+
+    if result is None:
+        print("No result. Agent did not finish.")
+        return False
+
+    print(result)
+    return not result.is_error
 
 
 def analyze_instance() -> bool:
@@ -39,9 +61,4 @@ def analyze_instance() -> bool:
     tail += f"\nCrashes: {crashes}" if crashes.is_dir() else f"\nLog: {log}"
     print(tail)
 
-    code = run_claude(config.prompt + tail)
-    if code != 0:
-        print(f"claude exited {code}.")
-        return False
-
-    return True
+    return asyncio.run(_execute_agent(config.prompt + tail, instance / "agent.txt"))

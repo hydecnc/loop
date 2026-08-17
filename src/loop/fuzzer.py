@@ -25,7 +25,7 @@ def launch_fuzzer():
 
     # setup workdir & corpus
     shutil.rmtree(config.workdir, ignore_errors=True)
-    os.mkdir(config.workdir)
+    os.makedirs(config.workdir, exist_ok=True)
     _ = subprocess.run(
         [
             "./bin/syz-db",
