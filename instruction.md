@@ -150,6 +150,20 @@ Every seed program goes in `StepStone-fuzzer/gpu_instrumentation/seed/`, and not
 
 Adding or removing a pseudo system call requires regenerating the descriptions before the fuzzer will build. Say so when a change needs that. Also say so when a change removes or renames a call, because saved corpus entries referencing it will be dropped on the next run.
 
+## The build must pass
+
+Before you finish, build what you changed and confirm it comes back clean:
+
+```
+CI=1 ./tools/syz-env make generate && CI=1 ./tools/syz-env make nvidia
+```
+
+Both must exit 0. `CI=1` is required: without it `syz-env` passes `-it` to Docker, which fails outright because you have no terminal. The loop rebuilds from clean at the start of the next round and stops the entire run when the build fails, so a tree you left broken does not cost you a round — it costs every round after it, until someone notices and restarts by hand.
+
+The executor is built with `-Werror`, so a warning is a failure. The one that will catch you: a `constexpr` or `static` constant at namespace scope that nothing references is `-Wunused-const-variable`, and it kills the build. Do not define constants, helpers, or fields ahead of the code that will use them — add each one in the same edit as its first use, and delete what you stopped needing instead of leaving it behind.
+
+If you cannot get the build green, revert your own changes rather than leaving them in the tree, then hand back that the round produced no change and say what defeated you. A reverted round costs one round. A broken tree costs all of them.
+
 ## The ledger
 
 Each round starts a fresh agent with no memory of the previous ones. The tree records what was added; nothing records what was tried and reverted. That is what `StepStone-fuzzer/gpu_instrumentation/LEDGER.md` is for. Before you finish, do two things to it:
