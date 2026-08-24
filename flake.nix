@@ -1,5 +1,5 @@
 {
-  description = "Flake for fuzz loop";
+  description = "Flake for fuzzing loop";
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
   inputs.systems.url = "github:nix-systems/default";
   inputs.flake-utils = {
@@ -13,21 +13,10 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        pkgsUnfree = import nixpkgs {
-          inherit system;
-          config = {
-            allowUnfreePredicate =
-              pkg:
-              builtins.elem (pkgs.lib.getName pkg) [
-                "claude-code"
-              ];
-          };
-        };
       in
       {
         devShells.default = pkgs.mkShell {
-          packages = with pkgsUnfree; [
-            claude-code
+          packages = with pkgs; [
             go
             python3
             uv
