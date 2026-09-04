@@ -21,23 +21,42 @@ def dump_workdir() -> None:
     print(f"Dumped previous workdir to {dump_loc}")
 
 
+def build_fuzzer(clean: bool = False) -> bool:
+    if clean:
+        _ = subprocess.run(
+            ["./tools/syz-env", "make", "clean"],
+            cwd=config.syzkaller,
+            check=True,
+        )
+
+    make_generate = ["./tools/syz-env", "make", "generate"]
+    make_nvidia = ["./tools/syz-env", "make", "nvidia"]
+
+    proc = subprocess.run(
+        make_generate,
+        cwd=config.syzkaller,
+        check=True,
+    )
+    if proc.returncode != 0:
+        print(f"{' '.join(make_generate)} failed.")
+        return False
+
+    proc = subprocess.run(
+        make_nvidia,
+        cwd=config.syzkaller,
+        check=True,
+    )
+    if proc.returncode != 0:
+        print(f"{' '.join(make_nvidia)} failed.")
+        return False
+
+    return True
+
+
 def launch_fuzzer() -> bool:
     # remake all components
-    _ = subprocess.run(
-        ["./tools/syz-env", "make", "clean"],
-        cwd=config.syzkaller,
-        check=True,
-    )
-    _ = subprocess.run(
-        ["./tools/syz-env", "make", "generate"],
-        cwd=config.syzkaller,
-        check=True,
-    )
-    _ = subprocess.run(
-        ["./tools/syz-env", "make", "nvidia"],
-        cwd=config.syzkaller,
-        check=True,
-    )
+    if not build_fuzzer():
+        return False
 
     # setup workdir & corpus
     dump_workdir()

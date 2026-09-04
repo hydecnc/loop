@@ -51,7 +51,7 @@ username ALL=(root) NOPASSWD: /usr/bin/timeout --signal\=INT --kill-after\=* * .
 
 Also, the generated image must have the [injection kernel module](./memory_injector/) installed.
 
-Finally, modify `src/loop/config.py` accordingly.
+Finally, modify `src/loop/config.py` accordingly and add a claude API key to `.env`
 
 ## Recommendation
 

@@ -1,12 +1,18 @@
+import asyncio
 import subprocess
 
-from .analysis import analyze_instance
+from .agent.agent import Analysis
+from .agent.claude import ClaudeAnalysisAgent, ClaudeVerificationAgent
 from .config import config
-from .fs_utils import copy_instance
-from .fuzzer import launch_fuzzer
+from .fs_utils import copy_instance, latest_instance
+from .fuzzer import build_fuzzer, launch_fuzzer
 
 
 def commit_changes() -> None:
+    """Commit changes made to the fuzzer and GPU driver source.
+
+    TODO: consider making GPU driver source immutable
+    """
     print("Committing changes in fuzzer and ogkm...")
 
     for repo in (config.syzkaller, config.open_gpu_kernel_modules):
@@ -28,7 +34,45 @@ def commit_changes() -> None:
         )
 
 
+def dump_analysis(analysis: Analysis) -> None:
+    instance = config.instances / f"{config.instance_prefix}-{latest_instance()}"
+    _ = (instance / "analysis.json").write_text(
+        analysis.model_dump_json(indent=2), "utf-8"
+    )
+
+
+async def analyze_instance() -> bool:
+    verifier = ClaudeVerificationAgent()
+
+    async with ClaudeAnalysisAgent() as agent:
+        analysis = await agent.analyze_instance(latest_instance())
+
+        if analysis.memory_bug:
+            print(f"Memory bug found! See {analysis}")
+            dump_analysis(analysis)
+            return True
+
+        attempt = 1
+        while attempt <= config.max_verification_attempt:
+            verification = await verifier.verify_changes(analysis)
+
+            if verification.verified:
+                dump_analysis(analysis)
+                return True
+
+            analysis = await agent.fix_analysis(verification)
+
+            print(f"Verification of changes failed: {verification.reason}")
+            attempt += 1
+
+        return False
+
+
 def run_fuzz_loop():
+    if not build_fuzzer(clean=True):
+        print("Initial fuzzer build failed.")
+        return
+
     while True:
         print("====Lauching Fuzzer====")
         if not launch_fuzzer():
@@ -39,7 +83,7 @@ def run_fuzz_loop():
         _ = copy_instance()
 
         print("====Analyzing Instance====")
-        if not analyze_instance():
+        if not asyncio.run(analyze_instance()):
             print("Analysis failed. Stopping.")
             return
 
