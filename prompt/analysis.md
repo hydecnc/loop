@@ -3,40 +3,40 @@ The bugs that you will be looking for is a specific class of bugs, which assumes
 That is, the attacker is assumed to have full read and write memory access to GPU memory (GDDR).
 In this case, the attacker can attempt attacks on the host side utilizing GPU DMA.
 Using GPU DMA, the attacker can access the IOVA region allowed by the IOMMU.
+
 Critically, the IOVA region contains structs such as the message queue.
 The message queue is a struct that the GSP and the driver utilizes for communication between them.
-Focusing on the communication from the GSP to the driver, the GSP creates a message in what's called a status queue, which is 63 entries long where each entries are 4096 bytes large.
-This time, we will focus on the status queue as well as its headers that stores information about the status queue itself.
+In this session, we will solely focus on the message queue and no other structs present in the IOVA region.
 
 As any fuzzer's goal is, your ultimate goal is to achieve deep states in the driver.
 The versions of the driver used for this is 560.35.03 and linux kernel version 6.8.0.
 
 Your job consists of three simple steps:
 
-1. Analyze the run. Either identify the cause of the crash by parsing Nvidia OGKM code or linux source code, or, if the run produced no crash, identify the earliest point at which the injection stops making progress.
+1. Analyze the run. Either identify the cause of the crash by parsing Nvidia OGKM code or linux source code, or, if the run produced no crash, identify the earliest point at which the fuzzer stops making progress.
 2. Utilize the primitives present under `gpu_instrumentation/` to create or modify a pseudo-system call which removes that blocker, hence allowing the fuzzer to explore more states.
-3. Make a seed program, if necessary, to encourage the fuzzer to reach a similar state as before.
+3. Make a seed program, if necessary, to encourage the fuzzer to reach deeper states involving IOVA overwrite before.
 
 The three steps will be repeated as much as possible until we discover a crash/bug that is exploitable by the attacker.
 
 ## How you are invoked
 
-You are started once per round by `main.py`, non-interactively, with `claude -p`,
-and your working directory is the loop root. There is no second turn. I cannot
-answer a question, and nothing you say reaches me before the next fuzzing run
-starts. So do not ask — state the assumption you are working under, mark it as an
+You are started after each round of fuzzer which has been running for a set amount of time from `main.py`.
+Your working directory is the loop root. I cannot answer a question, and nothing you say reaches me before the next fuzzing run
+starts.
+So, do not ask. Rather, state the assumption you are working under, mark it as an
 assumption, and proceed. Every change you intend to make must be on disk before
-you finish, and your final message is the round report.
+you finish, your final message is a structured output following a JSON schema provided along with this prompt.
 
-The loop root contains:
+The loop root contain:
 
 ```
-instruction.md                  this file
+prompt/                         this file
 src/loop/                       the loop driver
 instances/instance-N/log        round N's console log, when the round produced no crash
-instances/instance-N/crashes/   round N's crashes, one directory each, when it did
+instances/instance-N/crash/     round N's crash
 StepStone-fuzzer/               the fuzzer
-open-gpu-kernel-modules/        the NVIDIA driver source, 560.35.03
+open-gpu-kernel-modules/        the NVIDIA driver source, v560.35.03
 ```
 
 Appended after this prompt are two lines identifying the round. A quiet run:
@@ -50,12 +50,19 @@ A run that crashed:
 
 ```
 Round: N
-Crashes: instances/instance-N/crashes
+Crashes: instances/instance-N/crashes/
 ```
 
-**A `Crashes:` line means the run produced at least one crash; a `Log:` line means
-it did not.** That is how you tell the two cases below apart — not by size, and not
-by the presence of scary-looking lines in the log.
+**A fuzzer round can contain multiple types of crashes.**
+You will only analyze the crashes provided to you under `instances/instance-N/crashes/`.
+Any other crash that you might assume can happen could have either:
+
+- happened, but not under `crashes`
+- did not happen at all.
+
+Therefore do not put any effort in thinking about crashes different than the ones provided to you.
+
+**If there's no crash then the console's log is provided.**
 
 Each directory under `crashes/` is one distinct crash, named by its hash, and holds
 a `description` (the title syzkaller assigned it), one `logN` per occurrence (the
@@ -74,27 +81,42 @@ You are invoked in either of two situations, and you perform steps 1 to 3 in bot
 
 The second case is the ordinary one in early rounds, because the first constraints are about reaching the target code at all rather than about breaking it. A quiet run is a round like any other; it is not a failed round and it is not a reason to tell me to wait longer.
 
-I run the fuzzer. It lives on a remote workstation, so you cannot execute it, build kernel modules, or read its workdir. Both source trees here are yours to read and edit.
+The python program will run the fuzzer. Do not attempt to execute it, or read its workdir. This can mess up later fuzzing runs and bring the entire session down.
+Both source trees provided are yours to read and edit.
 
-## Which crashes you constrain away, and which you do not
+Keep the analysis grounded in code you have actually read.
+If the log is not enough to identify a cause, say that and say what additional output would settle it, rather than guessing.
 
-Two kinds of crash come out of this fuzzer and they are treated in opposite ways.
+## Types of crashes
 
-**Liveness failures.** The injection left the GPU or the driver unable to continue: a hang, a device reset, RPC timeouts, a queue that never recovers, the machine dying with no sanitizer output. These stop the fuzzer from exploring and they are what step 2 exists to eliminate.
+There are two kinds of crash that you must be aware of and they are treated in opposite ways.
 
-**Memory-safety reports.** KASAN, general protection fault, BUG, UBSAN — anything carrying a kernel stack trace through driver code. These are the product. Never add a constraint whose effect is to stop one of these from happening. Report it and change nothing.
+### Liveness failures
 
-If you cannot decide which one you are holding, treat it as a memory-safety report and change nothing. A missed round costs an hour; a constraint that quietly suppresses the finding costs the whole experiment.
+The injection left the GPU or the driver unable to continue its operation.
+It can be a hang, a device reset, RPC timeouts, a queue that never recovers, the machine dying with no sanitizer output.
 
-### Xid lines end the run
-
-A wedged GPU leaves the kernel healthy, so it used to go undetected and the fuzzer spent the rest of the round executing programs against a dead device. `syz-manager` now treats `NVRM: Xid (PCI:...): 119 | 120 | 79 | 62` as a crash: the round stops at that line and the VM is replaced. A crash directory will exist whose `description` reads `NVRM: GSP RPC timeout`, `NVRM: GSP task exception`, `NVRM: GPU has fallen off the bus`, or `NVRM: PMU halt`. Xid 13, 31, 43 and 69 are ignored; the device survives those.
+A common example of this are Xid errors.
+These happen when the GPU is wedged but leaves the kernel healthy.
+The fuzzer treats `NVRM: Xid (PCI:...): 119 | 120 | 79 | 62` as a crash, forcing execution stop at that line and the VM is replaced.
+A crash directory will exist whose `description` reads `NVRM: GSP RPC timeout`, `NVRM: GSP task exception`, `NVRM: GPU has fallen off the bus`, or `NVRM: PMU halt`.
+Xid 13, 31, 43 and 69 are ignored; the device survives those.
 
 Three consequences for your analysis:
 
 - A log ending shortly after an Xid is not a plateau. The round ended because the GPU stopped answering, not because the fuzzer ran out of new coverage. Do not analyse it as a quiet run.
 - **These are liveness failures, including Xid 120.** An Xid is the driver reporting a GPU-side failure, not a defect in the driver; 120 in particular carries a register dump from the GSP's own RISC-V core. The threat model already grants the attacker full control of the GPU, so faulting its firmware wins nothing. Constrain it away like any other liveness failure.
 - The Xid is printed once per run. The driver suppresses further RPC error output after the first fatal error, so the absence of later Xid lines means nothing and counting occurrences tells you nothing.
+
+### Memory safety reports
+
+Memory safety reports are the crahes that the fuzzer is looking for.
+Such crashes include KASAN, general protection fault, BUG, UBSAN.
+Never add a constraint whose effect is to stop one of these from happening.
+Report it and change nothing.
+
+If you cannot decide on what crash you are looking at, treat it as a memory-safety report and change nothing.
+A missed round is expensive and a constraint that quietly suppresses the finding costs the whole experiment.
 
 ## Constraint discipline
 
@@ -122,12 +144,10 @@ Some constraints will be static and others will be dynamic.
 
 **dynamic** — the constraint still comes from the source code, but its value is only knowable at runtime and has to be read live. The source tells you the relationship the value must satisfy; only the running machine tells you the value. The harness reads it and the fuzzer does not control it.
 
-**mixed** — a single pseudo system call carrying both, which is what you get once a call has static structure wrapped around fields that must track live state.
+For every pseudo system call that you create, you must add a prefix of `st` for static, or `dy` for dynamic to easily distinguish between the two types of constraints.
+If in some case there is a mixture, explicitly label which parts are static and dynamic in the source code, with the function prefix being `sd` for static/dynamic.
 
-For every pseudo system call that you create, you must add a prefix of `static` or `dynamic` to easily distinguish between the two types of constraints.
-If in some case there is a mixture, explicitly label which parts are static and dynamic in the source code, with the function prefix being `mixed`.
-
-Prefer static. A dynamic constraint takes a field away from the fuzzer for good, so it needs a reason that a static range cannot cover.
+Prefer static. A dynamic constraint in many cases is less stable, so it needs a reason that a static range cannot cover.
 
 ## Where things go
 
@@ -143,12 +163,12 @@ All paths are relative to the loop root, which is your working directory.
 | driver source                                           | `open-gpu-kernel-modules/`                                     |
 
 Every seed program goes in `StepStone-fuzzer/gpu_instrumentation/seed/`, and nothing else goes in that directory — it is packed wholesale into the corpus (`syz-db pack`), so a stray file there becomes a corpus entry or a load error. Do not leave `.prog` files loose in `gpu_instrumentation/` or anywhere else in the tree.
+If a seed program is no longer necessary or helpful, remove it, to minimize confusion for the fuzzer.
 
 `executor/gpu_instrumentation` and `sys/linux/gpu_instrumentation.txt` are symlinks into that one `gpu_instrumentation/` directory. Edit the real files listed above, not the symlinked views.
 
-**I commit for you.** After you finish, the loop runs `git add -A` and commits in both `StepStone-fuzzer/` and `open-gpu-kernel-modules/`. Two consequences: do not run git commands that change state, and do not leave scratch files inside either repo — write anything temporary to the loop root or `/tmp`, or it lands in the round's commit.
-
-Adding or removing a pseudo system call requires regenerating the descriptions before the fuzzer will build. Say so when a change needs that. Also say so when a change removes or renames a call, because saved corpus entries referencing it will be dropped on the next run.
+**I commit for you.** After you finish, the loop runs `git add -A` and commits in both `StepStone-fuzzer/` and `open-gpu-kernel-modules/`.
+Two consequences: do not run git commands that change state, and do not leave scratch files inside either repo — write anything temporary to the loop root or `/tmp`, or it lands in the round's commit.
 
 ## The build must pass
 
@@ -158,37 +178,20 @@ Before you finish, build what you changed and confirm it comes back clean:
 CI=1 ./tools/syz-env make generate && CI=1 ./tools/syz-env make nvidia
 ```
 
-Both must exit 0. `CI=1` is required: without it `syz-env` passes `-it` to Docker, which fails outright because you have no terminal. The loop rebuilds from clean at the start of the next round and stops the entire run when the build fails, so a tree you left broken does not cost you a round — it costs every round after it, until someone notices and restarts by hand.
+Both commands must exit with 0.
+`CI=1` is required. `syz-env` passes `-it` to Docker, which fails outright because you have no terminal.
+The loop rebuilds from clean at the start of the next round and stops the entire run when the build fails, so a tree you left broken does not cost you a round — it costs every round after it, until someone notices and restarts by hand.
 
-The executor is built with `-Werror`, so a warning is a failure. The one that will catch you: a `constexpr` or `static` constant at namespace scope that nothing references is `-Wunused-const-variable`, and it kills the build. Do not define constants, helpers, or fields ahead of the code that will use them — add each one in the same edit as its first use, and delete what you stopped needing instead of leaving it behind.
+Note that the executor is built with `-Werror`, so any warning leads to a failure.
+Do not define constants, helpers, or fields ahead of the code that will use them — add each one in the same edit as its first use, and delete what you stopped needing instead of leaving it behind.
 
-If you cannot get the build green, revert your own changes rather than leaving them in the tree, then hand back that the round produced no change and say what defeated you. A reverted round costs one round. A broken tree costs all of them.
-
-## The ledger
-
-Each round starts a fresh agent with no memory of the previous ones. The tree records what was added; nothing records what was tried and reverted. That is what `StepStone-fuzzer/gpu_instrumentation/LEDGER.md` is for. Before you finish, do two things to it:
-
-1. Fill in the `outcome` field of the last line, which is the constraint the previous round added and this round's log is the verdict on. It is one of: `reached new code` / `no change` / `reverted`.
-2. Append one line for the round you just analysed, with `outcome` left as `pending`:
-
-```
-round | blocker (file:line) | constraint added | static/dynamic/mixed | outcome
-```
-
-No prose in the ledger. Prose is how a record turns back into a hypothesis that the next round then spends itself confirming. If the file does not exist yet, create it with that header line.
+If you cannot get the build green, do not revert your own changes.
+Rather, report that the round produced no change and state precisely what defeated you.
 
 ## What to hand back each round
 
-1. What the round was: a crash, or a quiet run.
-   - **Crash** — the root cause, with `file:line` into the driver or kernel source, and which of the two crash kinds it is.
-   - **Quiet run** — the earliest point at which the injection stops making progress: which arguments actually varied, which values survived into the corpus, and the first check on the path from the injection site to the target code that turns the input away. Estimate the probability that random bytes pass that check. The estimate is what separates a real bottleneck from an assumed one, so give it even when it is rough.
-2. The constraint you are adding, in what form, and whether it is static, dynamic, or mixed.
-3. Which blocker or crash it removes, and your reasoning for why it does not also remove anything else.
-4. The seed program, if one is needed, and what state you expect it to reach.
-5. Anything you inferred rather than confirmed from source, marked as such — including any assumption you had to make because you could not ask.
-6. The ledger lines you wrote.
-
-Keep the analysis grounded in code you have actually read. If the log is not enough to identify a cause, say that and say what additional output would settle it, rather than guessing.
+All required fields for the structured output are specified with descriptions as a JSON schema.
+Make sure that the output is valid under the schema when you generate an output and follow the descriptions of fields.
 
 ## Scope
 

@@ -1,8 +1,9 @@
 import subprocess
 
-from .analysis import analyze_instance
+from .agent.agent import Verification
+from .agent.claude import ClaudeAnalysisAgent, ClaudeVerificationAgent
 from .config import config
-from .fs_utils import copy_instance
+from .fs_utils import copy_instance, latest_instance
 from .fuzzer import launch_fuzzer
 
 
@@ -26,6 +27,28 @@ def commit_changes() -> None:
         _ = subprocess.run(
             ["git", "commit", "-m", "feat: apply claude changes"], cwd=repo, check=True
         )
+
+
+def analyze_instance() -> bool:
+    agent = ClaudeAnalysisAgent()
+    verifier = ClaudeVerificationAgent()
+    verification: Verification | None = None
+
+    analysis = agent.analyze_instance(latest_instance())
+
+    attempt = 1
+    while attempt < config.max_verification_attempt:
+        verification = verifier.verify_changes(analysis)
+
+        if verification.verified:
+            return True
+
+        analysis = agent.fix_analysis(verification)
+
+        print(f"Verification of changes failed: {verification.reason}")
+        attempt += 1
+
+    return False
 
 
 def run_fuzz_loop():
